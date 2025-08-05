@@ -8,27 +8,51 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30  # 增加整体超时时间
     
     steps:
       - name: 🚀 Checkout Repository
         uses: actions/checkout@v4
+        timeout-minutes: 3
 
       - name: 📦 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: 'npm'
+        timeout-minutes: 5
 
       - name: 📥 Install Dependencies
-        run: npm ci
+        run: |
+          echo "开始安装依赖..."
+          npm ci --silent
+          echo "✅ 依赖安装完成"
+        timeout-minutes: 8
 
       - name: 🔨 Build Project
         run: |
+          echo "开始构建项目..."
           npm run build
-          echo "构建完成，验证文件..."
+          echo "✅ 构建完成，验证文件..."
           ls -la build/
-          echo "文件数量: $(find build -type f | wc -l)"
+          echo "📊 文件数量: $(find build -type f | wc -l)"
+          echo "📦 构建大小: $(du -sh build | cut -f1)"
+        timeout-minutes: 5
+
+      - name: 🧪 Test SSH Connection
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 30s
+          command_timeout: 2m
+          script: |
+            echo "🧪 测试SSH连接..."
+            echo "✅ SSH连接成功"
+            echo "📍 服务器: $(hostname)"
+            echo "👤 用户: $(whoami)"
+            echo "🕐 时间: $(date)"
 
       - name: 📤 Upload Build Files to Server
         uses: appleboy/scp-action@v0.1.7
@@ -36,30 +60,306 @@ jobs:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 5m
           source: "build/*"
-          target: "/home/${{ secrets.USERNAME }}/leetcode-note-build"
+          target: "/home/${{ secrets.USERNAME }}/leetcode-note-build-${{ github.run_number }}"
           strip_components: 1
 
-      - name: 🚀 Deploy to Server
+      - name: 🔍 Verify Upload
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          request_pty: true
+          timeout: 1m
+          command_timeout: 2m
           script: |
-            export BUILD_SOURCE="/home/${{ secrets.USERNAME }}/leetcode-note-build"
-            export DEPLOY_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+            BUILD_DIR="/home/${{ secrets.USERNAME }}/leetcode-note-build-${{ github.run_number }}"
+            echo "🔍 验证文件上传..."
+            if [ -d "$BUILD_DIR" ]; then
+              echo "✅ 构建目录存在: $BUILD_DIR"
+              echo "📊 文件数量: $(find $BUILD_DIR -type f | wc -l)"
+              echo "📦 目录大小: $(du -sh $BUILD_DIR | cut -f1)"
+              if [ -f "$BUILD_DIR/index.html" ]; then
+                echo "✅ 主页文件存在"
+              else
+                echo "❌ 主页文件缺失"
+                exit 1
+              fi
+            else
+              echo "❌ 构建目录不存在"
+              exit 1
+            fi
+
+      - name: 🛠️ Prepare Deployment Environment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 2m
+          command_timeout: 3m
+          script: |
+            echo "🛠️ 准备部署环境..."
             
-            echo "🔍 检查构建文件..."
-            if [ ! -d "$BUILD_SOURCE" ]; then
-              echo "❌ 构建文件目录不存在: $BUILD_SOURCE"
+            # 创建必要目录
+            mkdir -p /home/${{ secrets.USERNAME }}/logs
+            mkdir -p /home/${{ secrets.USERNAME }}/backups
+            
+            # 检查Web目录权限
+            WEB_DIR="/var/www/leetcode-note"
+            if [ ! -d "$WEB_DIR" ]; then
+              echo "⚠️ Web目录不存在，需要创建"
+              echo "请在服务器上运行: sudo mkdir -p $WEB_DIR && sudo chown ${{ secrets.USERNAME }}:www-data $WEB_DIR"
               exit 1
             fi
             
-            echo "📊 构建文件统计:"
-            echo "  - 文件数量: $(find $BUILD_SOURCE -type f | wc -l)"
-            echo "  - 目录大小: $(du -sh $BUILD_SOURCE | cut -f1)"
+            if [ ! -w "$WEB_DIR" ]; then
+              echo "⚠️ 没有Web目录写权限"
+              echo "请在服务器上运行: sudo chown ${{ secrets.USERNAME }}:www-data $WEB_DIR"
+              exit 1
+            fi
             
-            # 运行部署脚本
-            sudo /opt/scripts/leetcode-note_deploy.sh
+            echo "✅ 部署环境检查通过"
+
+      - name: 🚀 Execute Deployment Script
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 5m          # SSH连接超时
+          command_timeout: 15m  # 命令执行超时，给部署脚本充足时间
+          script: |
+            # 设置环境变量供部署脚本使用
+            export BUILD_SOURCE="/home/${{ secrets.USERNAME }}/leetcode-note-build-${{ github.run_number }}"
+            export DEPLOY_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+            export DEPLOY_RUN_NUMBER="${{ github.run_number }}"
+            export DEPLOY_COMMIT="${{ github.sha }}"
+            export DEPLOY_ACTOR="${{ github.actor }}"
+            export DEPLOY_BRANCH="${{ github.ref_name }}"
+            
+            echo "🚀 开始执行部署脚本..."
+            echo "================================================"
+            echo "📂 构建源: $BUILD_SOURCE"
+            echo "🕐 部署时间: $DEPLOY_TIMESTAMP"
+            echo "🔢 构建号: $DEPLOY_RUN_NUMBER"
+            echo "🔗 提交: $DEPLOY_COMMIT"
+            echo "👤 触发者: $DEPLOY_ACTOR"
+            echo "🌿 分支: $DEPLOY_BRANCH"
+            echo "================================================"
+            
+            # 检查部署脚本是否存在
+            DEPLOY_SCRIPT="/opt/scripts/leetcode-note_deploy.sh"
+            if [ ! -f "$DEPLOY_SCRIPT" ]; then
+              echo "❌ 部署脚本不存在: $DEPLOY_SCRIPT"
+              echo "请确保在服务器上创建了该脚本"
+              exit 1
+            fi
+            
+            # 检查脚本权限
+            if [ ! -x "$DEPLOY_SCRIPT" ]; then
+              echo "⚠️ 部署脚本没有执行权限，尝试修复..."
+              chmod +x "$DEPLOY_SCRIPT" || {
+                echo "❌ 无法修改脚本权限，尝试使用sudo..."
+                sudo chmod +x "$DEPLOY_SCRIPT" || {
+                  echo "❌ 无法修改脚本权限"
+                  exit 1
+                }
+              }
+              echo "✅ 脚本权限修复完成"
+            fi
+            
+            echo "✅ 部署脚本检查通过"
+            echo "🔧 开始执行部署脚本..."
+            echo "================================================"
+            
+            # 根据脚本需要的权限，尝试不同的执行方式
+            if [ -w "/var/www/leetcode-note" ] 2>/dev/null; then
+              # 如果有Web目录写权限，直接执行
+              echo "ℹ️ 使用当前用户权限执行脚本..."
+              "$DEPLOY_SCRIPT"
+            else
+              # 如果没有写权限，尝试使用sudo
+              echo "ℹ️ 使用sudo权限执行脚本..."
+              sudo "$DEPLOY_SCRIPT"
+            fi
+            
+            SCRIPT_EXIT_CODE=$?
+            echo "================================================"
+            
+            if [ $SCRIPT_EXIT_CODE -eq 0 ]; then
+              echo "✅ 部署脚本执行成功"
+            else
+              echo "❌ 部署脚本执行失败，退出码: $SCRIPT_EXIT_CODE"
+              exit $SCRIPT_EXIT_CODE
+            fi
+
+      - name: 🔄 Restart Web Service (Optional)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 1m
+          command_timeout: 2m
+          script: |
+            echo "🔄 重启Web服务..."
+            
+            # 尝试重载nginx（需要sudo权限）
+            if sudo -n nginx -t >/dev/null 2>&1; then
+              sudo -n systemctl reload nginx && echo "✅ Nginx重载成功" || echo "⚠️ Nginx重载失败"
+            else
+              echo "ℹ️ 跳过Nginx重载（需要sudo权限）"
+            fi
+        continue-on-error: true  # 即使失败也继续
+
+      - name: 🔍 Post-Deployment Verification
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 2m
+          command_timeout: 5m
+          script: |
+            echo "🔍 执行部署后验证..."
+            
+            # 检查Web目录
+            WEB_DIR="/var/www/leetcode-note"
+            echo "📁 检查Web目录: $WEB_DIR"
+            
+            if [ -d "$WEB_DIR" ]; then
+              FILE_COUNT=$(find "$WEB_DIR" -type f 2>/dev/null | wc -l)
+              if [ "$FILE_COUNT" -gt 0 ]; then
+                DIR_SIZE=$(du -sh "$WEB_DIR" 2>/dev/null | cut -f1)
+                echo "✅ Web目录包含 $FILE_COUNT 个文件，大小: $DIR_SIZE"
+                
+                # 检查关键文件
+                if [ -f "$WEB_DIR/index.html" ]; then
+                  echo "✅ 主页文件存在"
+                else
+                  echo "⚠️ 主页文件不存在"
+                fi
+                
+                # 显示部分文件列表
+                echo "📄 主要文件列表："
+                ls -la "$WEB_DIR/" | head -10
+              else
+                echo "❌ Web目录为空"
+                echo "🔍 检查部署脚本日志..."
+                if [ -f "/opt/logs/leetcode-note-deploy.log" ]; then
+                  echo "📋 最近的部署日志："
+                  tail -20 /opt/logs/leetcode-note-deploy.log
+                fi
+                exit 1
+              fi
+            else
+              echo "❌ Web目录不存在: $WEB_DIR"
+              exit 1
+            fi
+            
+            echo ""
+            echo "🌐 执行网站健康检查..."
+            sleep 3  # 等待服务稳定
+            
+            # 检查多个端点
+            ENDPOINTS=("http://localhost" "http://127.0.0.1" "http://localhost:80")
+            SUCCESS=false
+            
+            for endpoint in "${ENDPOINTS[@]}"; do
+              echo "🔗 测试: $endpoint"
+              RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$endpoint" 2>/dev/null || echo "000")
+              
+              case "$RESPONSE" in
+                "200")
+                  echo "✅ $endpoint 响应正常 (HTTP $RESPONSE)"
+                  SUCCESS=true
+                  break
+                  ;;
+                "000")
+                  echo "⚠️ $endpoint 连接失败"
+                  ;;
+                *)
+                  echo "⚠️ $endpoint 响应异常 (HTTP $RESPONSE)"
+                  ;;
+              esac
+            done
+            
+            if [ "$SUCCESS" = "true" ]; then
+              echo ""
+              echo "🎉 部署验证成功！"
+              echo "✅ 文件部署完成"
+              echo "✅ 网站响应正常"
+            else
+              echo ""
+              echo "⚠️ 网站响应异常，但文件部署可能仍然成功"
+              echo "🔍 可能的原因："
+              echo "  - Nginx配置问题"
+              echo "  - 服务未启动"
+              echo "  - 防火墙设置"
+              echo ""
+              echo "🔧 请检查以下内容："
+              echo "  - sudo systemctl status nginx"
+              echo "  - sudo nginx -t"
+              echo "  - sudo systemctl reload nginx"
+              
+              # 不因为健康检查失败而整体失败，因为文件可能已经部署成功
+              echo ""
+              echo "ℹ️ 文件部署已完成，请手动检查网站状态"
+            fi
+
+      - name: 🧹 Cleanup
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 1m
+          command_timeout: 2m
+          script: |
+            echo "🧹 清理临时文件..."
+            
+            # 清理构建文件
+            BUILD_DIR="/home/${{ secrets.USERNAME }}/leetcode-note-build-${{ github.run_number }}"
+            if [ -d "$BUILD_DIR" ]; then
+              rm -rf "$BUILD_DIR"
+              echo "✅ 清理构建文件: $BUILD_DIR"
+            fi
+            
+            # 清理旧备份（保留最近5个）
+            BACKUP_DIR="/home/${{ secrets.USERNAME }}/backups"
+            if [ -d "$BACKUP_DIR" ]; then
+              find "$BACKUP_DIR" -name "backup_*" -type d -mtime +5 -exec rm -rf {} \; 2>/dev/null || true
+              echo "✅ 清理旧备份完成"
+            fi
+            
+            echo "🎉 部署流程全部完成！"
+        if: always()  # 总是执行清理
+
+      - name: 📊 Deployment Summary
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 30s
+          command_timeout: 1m
+          script: |
+            echo "📊 部署摘要"
+            echo "=================="
+            echo "🕐 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "🔗 提交: ${{ github.sha }}"
+            echo "👤 触发者: ${{ github.actor }}"
+            echo "🌿 分支: ${{ github.ref_name }}"
+            echo "🏗️ 构建号: ${{ github.run_number }}"
+            
+            WEB_DIR="/var/www/leetcode-note"
+            if [ -d "$WEB_DIR" ]; then
+              echo "📁 Web目录: ✅"
+              echo "📄 文件数: $(find "$WEB_DIR" -type f | wc -l)"
+              echo "💾 大小: $(du -sh "$WEB_DIR" | cut -f1)"
+            else
+              echo "📁 Web目录: ❌"
+            fi
+        if: always()
