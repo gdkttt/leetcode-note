@@ -2,7 +2,7 @@
 slug: hello-world
 title: Hello World - 我的第一篇测试文章
 authors: [dany]
-tags: [test, hello, leetcode]
+tags: [test, leetcode]
 ---
 
 欢迎来到我的LeetCode学习笔记博客！这是一篇测试文章。
