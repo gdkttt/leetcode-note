@@ -1,43 +1,69 @@
-name: Deploy Docusaurus to Cloud Server
+name: Deploy LeetCode Note to Cloud Server
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
+    
     steps:
-      - name: Checkout code
+      - name: 🚀 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: 📦 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: 📥 Install Dependencies
         run: npm ci
 
-      - name: Build static site
-        run: npm run build
+      - name: 🔨 Build Project
+        run: |
+          npm run build
+          echo "构建完成，验证文件..."
+          ls -la build/
+          echo "文件数量: $(find build -type f | wc -l)"
 
-      - name: Deploy to Cloud Server via SSH
+      - name: 📤 Upload Build Files to Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "build/*"
+          target: "/tmp/leetcode-note-build-${{ github.run_number }}"
+          strip_components: 1
+
+      - name: 🚀 Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # 确保使用正确的用户环境
-            export PATH="/usr/local/bin:/usr/bin:/bin"
-            cd /opt/projects/leetcode-note
-
+            export BUILD_SOURCE="/tmp/leetcode-note-build-${{ github.run_number }}"
+            export DEPLOY_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+            
+            echo "🔍 检查构建文件..."
+            if [ ! -d "$BUILD_SOURCE" ]; then
+              echo "❌ 构建文件目录不存在: $BUILD_SOURCE"
+              exit 1
+            fi
+            
+            echo "📊 构建文件统计:"
+            echo "  - 文件数量: $(find $BUILD_SOURCE -type f | wc -l)"
+            echo "  - 目录大小: $(du -sh $BUILD_SOURCE | cut -f1)"
+            echo "  - 主要文件:"
+            ls -la $BUILD_SOURCE/ | head -10
+            
             # 运行部署脚本
             sudo /opt/scripts/leetcode-note_deploy.sh
-
-            # 验证部署
-            curl -f http://localhost >/dev/null && echo "✅ 部署验证成功" || echo "❌ 部署验证失败"
+            
+            # 清理临时文件
+            rm -rf "$BUILD_SOURCE"
