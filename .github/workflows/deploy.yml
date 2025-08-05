@@ -1,0 +1,43 @@
+name: Deploy Docusaurus to Cloud Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static site
+        run: npm run build
+
+      - name: Deploy to Cloud Server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # 确保使用正确的用户环境
+            export PATH="/usr/local/bin:/usr/bin:/bin"
+            cd /opt/projects/leetcode-note
+
+            # 运行部署脚本
+            sudo /opt/scripts/leetcode-note_deploy.sh
+
+            # 验证部署
+            curl -f http://localhost >/dev/null && echo "✅ 部署验证成功" || echo "❌ 部署验证失败"
