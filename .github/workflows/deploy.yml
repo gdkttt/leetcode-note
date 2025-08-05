@@ -37,7 +37,7 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: "build/*"
-          target: "/tmp/leetcode-note-build-${{ github.run_number }}"
+          target: "/home/${{ secrets.USERNAME }}/leetcode-note-build"
           strip_components: 1
 
       - name: 🚀 Deploy to Server
@@ -46,8 +46,9 @@ jobs:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          request_pty: true
           script: |
-            export BUILD_SOURCE="/tmp/leetcode-note-build-${{ github.run_number }}"
+            export BUILD_SOURCE="/home/${{ secrets.USERNAME }}/leetcode-note-build"
             export DEPLOY_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
             
             echo "🔍 检查构建文件..."
@@ -59,11 +60,6 @@ jobs:
             echo "📊 构建文件统计:"
             echo "  - 文件数量: $(find $BUILD_SOURCE -type f | wc -l)"
             echo "  - 目录大小: $(du -sh $BUILD_SOURCE | cut -f1)"
-            echo "  - 主要文件:"
-            ls -la $BUILD_SOURCE/ | head -10
             
             # 运行部署脚本
             sudo /opt/scripts/leetcode-note_deploy.sh
-            
-            # 清理临时文件
-            rm -rf "$BUILD_SOURCE"
