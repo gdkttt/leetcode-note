@@ -1,9 +1,10 @@
-hello:
-  label: Hello
-  permalink: /hello
-  description: Hello tag description
+leetcode:
+  label: LeetCode
+  permalink: /leetcode
+  description: LeetCode tag description
 
-docusaurus:
-  label: Docusaurus
-  permalink: /docusaurus
-  description: Docusaurus tag description
+test:
+  label: Test
+  permalink: /test
+  description: Test tag description
+
